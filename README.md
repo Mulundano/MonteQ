@@ -5,12 +5,12 @@ Necessary packages:
   * networkX
   * numpy
   * matplotlib( qiskit[visualize] comes with it)
-  * 
+    
 **WARNING: current structure does not have error handling so inputs must be given in specified format**
 
 ## Instructions: 
 Within the notebook labeled "mcts_example" in the example folder, there are three lists labeled ucc_2_4, ucc_2_6, ucc_4_8. These are lists of Pauli words.
-Each Pauli word is in the form of a list of Pauli strings (not in Tableau form). Within notebook, the time and UCT parameters are set early on
+Each Pauli word is in the form of a list of Pauli strings (not in Tableau form). Within notebook, the time and UCT parameters are set early on. The following functions are best used in a jupyter notebook
 
 **If you wish to test a full circuit output use the function "full_circuit" located in the src/mcts_module file and the pair_solve function in the src/heuristic_module file - "mcts_example" shows how to dynamically add the path into your system path so that src can be a module.**
 
