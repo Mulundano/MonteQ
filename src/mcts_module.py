@@ -39,8 +39,7 @@ def expand(node, function, graph):
         new_node.action = new_action
         new_node.parent = node
         new_node.curr_cx_num = node.curr_cx_num + cx_count(new_action)
-        if new_node not in node.children:
-            node.children.append(new_node)
+        node.children.append(new_node)
 
 
 def select(node, parameter):
@@ -150,11 +149,9 @@ def best_action(root_node):
     path = None 
     num = float('inf')
     node = None
-    # print(root_node.state.return_string())
-    # print([(x.state.return_string(), x.action) for x in root_node.children])
-    # loop to go through all child nodes and pick the one with lowest cx count
+
+    # loop to go through alll child nodes and pick the one with lowest cx count
     for child in root_node.children:
-        
         if child.qi != 0:
             if (child.qi/child.ni) < num:
                 num = (child.qi/child.ni)
@@ -164,7 +161,7 @@ def best_action(root_node):
                 num = (child.qi/child.ni)
                 path = child.action
                 node = child
-    #print(path)    
+
     return path, node.state
 
 
@@ -173,11 +170,10 @@ def MCTS(root_node, function, param, timeout):
     Function that completely executes MCTS
     root_node: node that holds root node
     '''
-    
-    tree_graph = nx.DiGraph()# graph to store tree produced in MCTS for visualizations
-
     start_time = time.time() 
-    current_time = start_time
+    current_time = time.time()
+    tree_graph = nx.DiGraph()# graph to store tree produced in MCTS for visualizations
+    
     # loop to run specificed number of iterations
     while current_time < start_time + timeout:
         leaf_node = tree_policy(root_node, function, param, tree_graph) # selection and expansion phases 
@@ -191,7 +187,7 @@ def MCTS(root_node, function, param, timeout):
 #######################################################################################
 # Functions going forward do not affect MCTS implementation but use it 
 
-def p_word_solution(p_word, function, mcts_param, word_time):
+def p_word_solution(p_word, function, mcts_param, end_time):
     '''
     Function to create a solution for a Pauli word 
 
@@ -201,22 +197,19 @@ def p_word_solution(p_word, function, mcts_param, word_time):
     end_time: float to use with MCTS to dictate stop time in seconds
     '''
     path = []
-    order = list(range(p_word.row_num))
+
     # loop to run MCTS until the Pauli word is fully implemented
-    while p_word.row_num != 0:
-        #move_time = word_time/p_word.row_num
-        #print(f"Move time {move_time}s")
-        action, new_word, graph = MCTS(Node(p_word), function, mcts_param, word_time)
+    while len(p_word.xs) != 0:
+        action, new_word, graph = MCTS(Node(p_word), function, mcts_param, end_time)
         path += action
         p_word = new_word
         
-        #grapher(graph)
 
     return path # returns a list containing the 'head' of the Pauli word circuit for a single Pauli word
 
 
 
-def full_circuit(p_sentence, function, mcts_param, total_time, rot_params = None, gate_cancellation=False):
+def full_circuit(p_sentence, function, mcts_param, stop_time, rot_params = None, gate_cancellation=False):
     '''
     Function to construct full circuit given a set of Pauli words where each Pauli word is composed of mutually commuting Pauli strings
     
@@ -229,7 +222,7 @@ def full_circuit(p_sentence, function, mcts_param, total_time, rot_params = None
     
     tail = []
     head = []
-    num_paulis = sum(len(x) for x in p_sentence)
+    num_paulis = sum([len(x) for x in p_sentence])
     num_qubits = len(p_sentence[0][0])
 
     # condition to create place hoolder rotation parameters
@@ -238,14 +231,10 @@ def full_circuit(p_sentence, function, mcts_param, total_time, rot_params = None
         
     paulis = ["-X", "X", "-Y", "Y", "-Z", "Z"]
 
-    #word_times = [total_time*(x/totals_sum) for x in totals]
     # loop to solve each Pauli word in the list
     for commute_word in p_sentence:
         p_word = Cirq_Tableau(commute_word) # turns a list of Pauli strings into a Tableau
 
-        
-        #word_time = (p_word.row_num/num_paulis)*total_time
-        #print(f"Word time {word_time}s")
         if head:
             for op in head:
                 match op[0]:
@@ -255,16 +244,12 @@ def full_circuit(p_sentence, function, mcts_param, total_time, rot_params = None
                         p_word.apply_S(op[1])
                     case "H":
                         p_word.apply_H(op[1])
-                        
-            if implement_checker(p_word, commute_word, head):
-                continue
-            solution = p_word_solution(p_word, function, mcts_param, total_time)
+
+            solution = p_word_solution(p_word, function, mcts_param, stop_time)
             head += solution
             tail += [x for x in solution if x[0] not in paulis]
         else:
-            if implement_checker(p_word, commute_word, head):
-                continue
-            solution = p_word_solution(p_word, function, mcts_param, total_time)  
+            solution = p_word_solution(p_word, function, mcts_param, stop_time)  
             head += solution
             tail += [x for x in solution if x[0] not in paulis]
 
@@ -288,36 +273,6 @@ def full_circuit(p_sentence, function, mcts_param, total_time, rot_params = None
 
 #############################################33
 # miscellanous fnctions that are used in this module or can be used 
-def implement_checker(p_word, commute_word,  head):
-    implemented = False
-    if p_word.row_num == 1:
-            x_z = p_word.xs[0] | p_word.zs[0]
-            in_ndx = 0
-            if sum(x_z) == 1:
-                implemented = True
-                for ndx, pauli in enumerate(x_z):
-                    if pauli == 1:
-                        in_ndx = ndx
-                        break
-
-                if "-" in commute_word:
-                    if "X" in commute_word:
-                        head.append(("-X", in_ndx))
-                    elif "Y" in commute_word:
-                        head.append(("-Y", in_ndx))
-                    elif "Z" in commute_word:
-                        head.append(("-Z", in_ndx))
-                        
-                else:
-                    if "X" in commute_word:
-                        head.append(("X", in_ndx))
-                      
-                    elif "Y" in commute_word:
-                        head.append(("Y", in_ndx))
-                        
-                    elif "Z" in commute_word:
-                        head.append(("Z", in_ndx))
-    return implemented
 
 def convert_to_circuit(num, solution, rot_params):
     '''
@@ -344,7 +299,7 @@ def convert_to_circuit(num, solution, rot_params):
             case "-X" | "X":
                 qc.h(pos-op[1])
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[ndx]),pos-op[1])#math.pi + rot_params[ndx]),pos-op[1])
+                    qc.rz(2*(math.pi + rot_params[ndx]),pos-op[1])
                 else:
                     qc.rz(2*rot_params[ndx],pos-op[1])
                 qc.h(pos-op[1])
@@ -353,15 +308,15 @@ def convert_to_circuit(num, solution, rot_params):
                 qc.s(pos - op[1])
                 qc.h(pos-op[1])
                 if "-" in op[0]:
-                    qc.rz(2*rot_params[ndx],pos-op[1])#(2*(math.pi + rot_params[ndx]),pos-op[1])
+                    qc.rz(2*(math.pi + rot_params[ndx]),pos-op[1])
                 else:
-                    qc.rz(2*(-rot_params[ndx]),pos-op[1])
+                    qc.rz(2*rot_params[ndx],pos-op[1])
                 qc.h(pos-op[1])
                 qc.sdg(pos - op[1])
                 ndx += 1
             case "-Z" | "Z":
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[ndx]),pos-op[1])#(2*(math.pi + rot_params[ndx]),pos-op[1])
+                    qc.rz(2*(math.pi + rot_params[ndx]),pos-op[1])
                 else:
                     qc.rz(2*rot_params[ndx],pos-op[1])
                 ndx += 1
@@ -378,4 +333,4 @@ def grapher(graph):
     plt.figure(figsize=(35, 30))
     nx.nx_agraph.write_dot(graph,'test.dot')
     pos =graphviz_layout(graph, prog='dot')
-    nx.draw(graph, pos,  with_labels = True, node_color="white", node_size=3500)
+    nx.draw(tree, pos,  with_labels = True, node_color="white", node_size=3500)
