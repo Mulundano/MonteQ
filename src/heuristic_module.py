@@ -3,7 +3,7 @@ from src.classes import Cirq_Tableau
 
 
 # TODO: write a more efficient pruning algorithm
-def prune(tableau: Cirq_Tableau):
+def prune(tableau: Cirq_Tableau, ndx_list):
     '''
     Function to remove rows in a tableau with only a single nonidentity operation
     
@@ -15,6 +15,9 @@ def prune(tableau: Cirq_Tableau):
 
     single_q = [] # loist of single qubit operations 
     
+    track_ndx = ndx_list.copy()
+    
+    rmv_ndx = []
     # extracts x, z and sign arrays
     x, z, s = tab.xs, tab.zs, tab.ss
 
@@ -24,26 +27,26 @@ def prune(tableau: Cirq_Tableau):
     # loop that checks through each row to find out if it has a Pauli weight of 1
     for r_ndx in range(len(weight_array)):
         if sum(weight_array[r_ndx])  == 1:
-
+            val = track_ndx[r_ndx]
             # appends index to be pruned if Pauli weight == 1
             prn_ndxs.append(r_ndx)
-
+            rmv_ndx.append(val)
             # checks what type of Pauli is on that index X, Y or Z and appends to path with action weight of zero 
             if sum(z[r_ndx]) == 0:
                 if s[r_ndx] == 0:
-                    single_q.append(("X", int(np.argmax(x[r_ndx] == 1))))
+                    single_q.append(("X", int(np.argmax(x[r_ndx] == 1)), val))
                 else:
-                    single_q.append(("-X", int(np.argmax(x[r_ndx] == 1))))
+                    single_q.append(("-X", int(np.argmax(x[r_ndx] == 1)), val))
             elif sum(x[r_ndx]) == 0:
                 if s[r_ndx] == 0:
-                    single_q.append(("Z", int(np.argmax(z[r_ndx] == 1))))
+                    single_q.append(("Z", int(np.argmax(z[r_ndx] == 1)), val))
                 else:
-                    single_q.append(("-Z", int(np.argmax(z[r_ndx] == 1))))
+                    single_q.append(("-Z", int(np.argmax(z[r_ndx] == 1)), val))
             else:
                 if s[r_ndx] == 0:
-                    single_q.append(("Y", int(np.argmax(x[r_ndx] == 1))))
+                    single_q.append(("Y", int(np.argmax(x[r_ndx] == 1)), val))
                 else:
-                    single_q.append(("-Y", int(np.argmax(x[r_ndx] == 1))))
+                    single_q.append(("-Y", int(np.argmax(x[r_ndx] == 1)), val))
                     
         elif sum(weight_array[r_ndx])  == 0: # elif removes fully I lines 
             x, z, s = np.delete(x, r_ndx, axis=0), np.delete(z, r_ndx, axis=0), np.delete(s, r_ndx)
@@ -52,10 +55,11 @@ def prune(tableau: Cirq_Tableau):
     x, z, s = np.delete(x, prn_ndxs, axis=0), np.delete(z, prn_ndxs, axis=0), np.delete(s, prn_ndxs)
     column_num = len(x[0]) if x.size != 0 else 0 
     row_num = len(x)
-
+    new_ndx_list = [x for x in ndx_list if x not in rmv_ndx]
     # updates tableau and returns it 
     tab.xs, tab.zs, tab.ss, tab.column_num, tab.row_num = x, z, s, column_num,row_num
-    return tab, single_q
+    return tab, single_q, new_ndx_list
+    
 
 
 def identify(tableau, op_list, ctrl, targ):
@@ -183,7 +187,7 @@ def compare(tab, ndx, ctrl, targ):
             return identify(tab, op_list, ctrl, targ)
 
 
-def pair_solve(tableau, ndx):
+def pair_solve(tableau, ndx, ndx_list):
     '''
     Heuristic function to produce a single reduction from one node of a tree to a child
 
@@ -250,7 +254,7 @@ def pair_solve(tableau, ndx):
             reduction += operation # appends to reduction
 
     # prunes of implemented Pauli string
-    tab, single_q = prune(tab)
+    tab, single_q, new_ndx_list = prune(tab, ndx_list)
     reduction += single_q # appends to reduction
     
-    return tab, reduction
+    return tab, reduction, new_ndx_list
