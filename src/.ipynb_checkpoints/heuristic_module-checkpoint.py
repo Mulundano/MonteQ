@@ -187,7 +187,7 @@ def compare(tab, ndx, ctrl, targ):
             return identify(tab, op_list, ctrl, targ)
 
 
-def pair_solve(tableau, ndx, ndx_list):
+def pair_solve(tableau, ndx, ndx_list, kwargs):
     '''
     Heuristic function to produce a single reduction from one node of a tree to a child
 
