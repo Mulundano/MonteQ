@@ -133,7 +133,7 @@ class Cirq_Tableau:
         string = ''
         for i in range(self.row_num):
             if self.ss[i]:
-                    string = "-"  
+                    string += "-"  
 
             for j in range(self.column_num):
                 if self.xs[i][j] and not self.zs[i][j]:
