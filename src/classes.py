@@ -86,9 +86,9 @@ class Cirq_Tableau:
         for i, pauli_string in enumerate(pauli_word):
             for j, pauli in enumerate(pauli_string):
                 if pauli == "X" or pauli == "Y":
-                    temp_x[i][(self.column_num-1)-j] = 1
+                    temp_x[i][j] = 1
                 if pauli == "Z" or pauli == "Y":
-                    temp_z[i][(self.column_num-1)-j] = 1
+                    temp_z[i][j] = 1
         return temp_x, temp_z
 
     # Clifford operations on tableau. 

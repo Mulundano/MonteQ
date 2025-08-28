@@ -3,7 +3,7 @@ from src.classes import Cirq_Tableau
 
 
 # TODO: write a more efficient pruning algorithm
-def prune(tableau: Cirq_Tableau, ndx_list):
+def prune(tableau: Cirq_Tableau, ndx_list, allowed):
     '''
     Function to remove rows in a tableau with only a single nonidentity operation
     
@@ -26,7 +26,7 @@ def prune(tableau: Cirq_Tableau, ndx_list):
 
     # loop that checks through each row to find out if it has a Pauli weight of 1
     for r_ndx in range(len(weight_array)):
-        if sum(weight_array[r_ndx])  == 1:
+        if sum(weight_array[r_ndx])  == 1 and r_ndx in allowed:
             val = track_ndx[r_ndx]
             # appends index to be pruned if Pauli weight == 1
             prn_ndxs.append(r_ndx)
@@ -187,7 +187,7 @@ def compare(tab, ndx, ctrl, targ):
             return identify(tab, op_list, ctrl, targ)
 
 
-def pair_solve(tableau, ndx, ndx_list, kwargs):
+def pair_solve(tableau, ndx, ndx_list,allowed, kwargs):
     '''
     Heuristic function to produce a single reduction from one node of a tree to a child
 
@@ -254,7 +254,7 @@ def pair_solve(tableau, ndx, ndx_list, kwargs):
             reduction += operation # appends to reduction
 
     # prunes of implemented Pauli string
-    tab, single_q, new_ndx_list = prune(tab, ndx_list)
+    tab, single_q, new_ndx_list = prune(tab, ndx_list, allowed)
     reduction += single_q # appends to reduction
     
     return tab, reduction, new_ndx_list
