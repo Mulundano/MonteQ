@@ -1,4 +1,4 @@
-# MCTS implementation readme
+# MonteQ readme
 
 Necessary packages:
   * [qiskit['visualize']](https://docs.quantum.ibm.com/guides/install-qiskit)
