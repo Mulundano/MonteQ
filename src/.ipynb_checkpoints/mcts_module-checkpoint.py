@@ -1,17 +1,49 @@
 import math
+import heapq as hp
+import rustworkx as rx
 from src.classes import Node, Cirq_Tableau
-from qiskit.circuit import QuantumCircuit, Parameter, ParameterVector
+from qiskit.quantum_info import Clifford
+from qiskit.circuit import QuantumCircuit, ParameterVector
 from qiskit.transpiler.passes import CommutativeCancellation
+from qiskit.transpiler.passes.synthesis.hls_plugins import  GreedySynthesisClifford
 from qiskit.converters import circuit_to_dag, dag_to_circuit
-import matplotlib.pyplot as plt
+from qiskit import transpile
 import time
 
-def cx_count(action_list):
-    '''
-    Function to count number of CXs present
 
-    action_list: List containing information on gates applied 
-    '''
+
+############################################################
+#DAG implementation functions
+
+# Function to create an anticommute DAG from a set of Pauli strings
+def build_anticommute_dag(Pauli_word):
+
+    # initialization of graph
+    graph = rx.PyDAG()
+    graph.add_nodes_from(range(len(Pauli_word)))
+
+    # for loop to create anticommutation connections
+    for j in range(len(Pauli_word)):
+        for i in range(0, j):
+            if not pauli_strings_commute(Pauli_word[i], Pauli_word[j]):
+                graph.add_edge(i, j, None)
+
+    return graph
+
+# Function to return indexes of nodes without incoming connections 
+def front_layer(graph):
+
+    pred = graph.predecessor_indices
+    def func(node):
+        return len(pred(node)) == 0
+
+    return graph.filter_nodes(func)
+    
+###############################################
+#MCTS related functions
+
+#Function to count number of CXs present
+def cx_count(action_list):
     count = 0
     for action in action_list:
         if action[0] == "CX":
@@ -19,78 +51,50 @@ def cx_count(action_list):
 
     return count
 
-
-def choose(node, function, parameter):
-    '''
-    Function to select a leaf node and expand out non-leaf nodes
-
-    node: Node to begin process with 
-    function: heuristic function used to expand out tree
-    parameter: float value for UCT 
-    '''
+# function to select a leaf node and expand out non-leaf nodes
+def choose(node, function, parameter, kwargs):
+    
 
     # condition checks if there are any untouched actions for a node
     if node.untouched:
-        ndx = rnd.choice(node.untouched) #node.untouched[0] chooses index randomly from remaining untouched indexes
-        new_state, new_action, new_ndx_list = function(node.state, ndx, node.ndx_list) # creates new Pauli word 
-
-        # condition to check if current Pauli word is fully implemented but have list of Pauli words in set has not been exhausted
-        if new_state.row_num == 0 and node.plist:
-            new_state = node.plist[0].copy()
-            actions = node.action + new_action
-
-            # loop to have actions applied to next Pauli word
-            for op in actions:
-                match op[0]:
-                    case "CX":
-                        new_state.apply_CX(op[1], op[2])
-                    case "S":
-                        new_state.apply_S(op[1])
-                    case "H":
-                        new_state.apply_H(op[1])
-
-            # choosing leaf node and filling out its properties
-            selected_node = Node(new_state)
-            selected_node.parent = node
-            selected_node.action = actions
-            selected_node.ndx_list = new_ndx_list
-            selected_node.plist = [x for x in node.plist if x != node.plist[0]]
-            node.children.append(selected_node)
-            node.untouched = [x for x in node.untouched if x != ndx]
-            return selected_node
+        ndx =  node.untouched[0] #rnd.choice(node.untouched) #node.untouched[0] chooses index randomly from remaining untouched indexes
+        start = time.time()
+        new_state, new_action, new_ndx_list = function(node.state, ndx, node.ndx_list,node.untouched, kwargs) # creates new Pauli word 
+        end = time.time()
 
         # choosing leaf node and filling out its properties
         selected_node = Node(new_state)
+        
+        if node.dag != None:
+            rmv = [i for i in node.ndx_list if i not in new_ndx_list]
+            dag = node.dag.copy()
+            dag.remove_nodes_from(rmv)
+            selected_node.dag = dag
+            selected_node.untouched = [new_ndx_list.index(i) for i in front_layer(dag)]
+            
         selected_node.parent = node
-        selected_node.plist = [x.copy() for x in node.plist]
         selected_node.action = (node.action + new_action)
         selected_node.ndx_list = new_ndx_list
+        selected_node.action_time = node.action_time + (end-start)
         node.children.append(selected_node)
         node.untouched = [x for x in node.untouched if x != ndx]
         return selected_node
     else:
-        value = float('inf')
+        value = -float('inf')
         selected_node = None 
 
         # loop to go over all the child nodes and pick the one with the highest UCT
         for child in node.children:
             new_val = child.UCT(parameter)
-            if new_val < value:
+            if new_val > value:
                 value = new_val
                 selected_node = child
 
         return selected_node
 
-
-def tree_policy(node, function, parameter):
-    '''
-    Function that runs through selections and expansions until it arrives at a leaf (unexpanded) node
-
-    node: selected node to expand out
-    function: heuristic function to prduce action
-    parameter: float to hold paramter for UCT calculations
-    '''
-
+# function that runs through selections and expansions until it arrives at a leaf (unexpanded) node
+def tree_policy(node, function, parameter, kwargs):
+    
     # loop to keep selecting and expanding
     while True:
 
@@ -103,32 +107,32 @@ def tree_policy(node, function, parameter):
                     return node
                     
                 
-                node = choose(node, function, parameter)
+                node = choose(node, function, parameter, kwargs)
             else:
                 return node
         else:
-            node = choose(node, function, parameter) # select one of the children
+            node = choose(node, function, parameter, kwargs) # select one of the children
 
 
-
-def rollout_policy(node, function, solution_list):
-    '''
-    Function to simulate continuation of tree until a terminal node
-
-    node: node to simulate from
-    function: heuristic function to produce action between nodes
-    '''
+# function to simulate continuation of tree until a terminal node
+def rollout_policy(node, function, solution_list, kwargs):
+    
     state = node.state.copy()
     action = node.action.copy()
-    plist = node.plist.copy()
+    action_time = node.action_time
     ndx_list = node.ndx_list.copy()
+    allowed = node.untouched.copy()
+    dag = None
+    if node.dag != None:
+        dag = node.dag.copy()
+        
     # loop to run until terminal node is found
     while True:
 
         # break condition
         if state.row_num == 0:
             count = cx_count(action)
-            solution = (count, action)
+            solution = (count,action_time ,len(action),action)
             #print(solution)
             if solution not in solution_list:
                 solution_list.append(solution)
@@ -139,29 +143,41 @@ def rollout_policy(node, function, solution_list):
         index = None
 
         # loop to find Pauli string in current Pauli word with highest Pauli weight
+        #print(weight_word)
         for i, string in enumerate(weight_word):
             w_sum = sum(string)
-            if w_sum < weight:
+            if w_sum < weight and i in allowed:
                 weight = w_sum 
                 index = i
         #index = rnd.choice(range(state.row_num))
-        state, actions, ndx_list = function(state, index, ndx_list)
-        if state.row_num == 0 and plist:
-            state = plist[0]
-            plist = [x for x in plist if x != state]
-            #ndx_list = list(range(state.row_num))
+        start = time.time()
+        new_state, actions, new_ndx_list = function(state, index, ndx_list, allowed, kwargs)
+        end = time.time()
+        if dag != None:
+            rmv = [i for i in ndx_list if i not in new_ndx_list]
+            new_dag = dag.copy()
+            new_dag.remove_nodes_from(rmv)
+            dag = new_dag
+            allowed = [new_ndx_list.index(i) for i in front_layer(dag)]
+        else:
+            allowed = list(range(new_state.row_num))
+
+        state = new_state
+        ndx_list = new_ndx_list
+        action_time += (end-start)
+        # print(index)
+        # print(state)
+        # print(allowed)
+        # print(index)
+        #print(state.return_string())
+        
         action += actions
+        
         
 
 
-
+# function to backpropagate estimated value at terminal state up through tree
 def backpropagate(node, value):
-    '''
-    Function to backpropagate estimated value at terminal state up through tree
-
-    node: current node to backpropagate from
-    value: value at terminal state
-    '''
 
     # loop to backpropagate upwards until root is found
     while node != None:
@@ -172,11 +188,12 @@ def backpropagate(node, value):
 
 def best_solution(solution_list):
     hp.heapify(solution_list)
-    return solution_list[0][1]
+    return solution_list[0][-1]
 
 
-
-def MCTS(root_node, function, param, timeout):
+# Monte Carlo Tree Search Function
+def MCTS(root_node, function, param,stop_time, sims,rot_params,checks, kwargs):
+    
     '''
     Function that completely executes MCTS
     root_node: node that holds root node
@@ -184,118 +201,87 @@ def MCTS(root_node, function, param, timeout):
     start_time = time.time() 
     current_time = start_time
     solution_list = []
-    # count = 0
+    #count = 0
     # loop to run specificed number of iterations
-    while current_time < start_time + timeout:
-        leaf_node = tree_policy(root_node, function, param) # selection and expansion phases 
-        value = rollout_policy(leaf_node, function, solution_list) # simulation of leaf node
-        backpropagate(leaf_node, value)
-        current_time = time.time()
-        # count += 1
-    # print(count)
-    solution =   best_solution(solution_list)  
+    if stop_time != None and sims == None:
+        while current_time < (start_time + stop_time):
+            leaf_node = tree_policy(root_node, function, param, kwargs) # selection and expansion phases
+            value = rollout_policy(leaf_node, function, solution_list, kwargs) # simulation of leaf node
+            backpropagate(leaf_node, value)
+            current_time = time.time()
+    else:
+        if sims == None:
+            sims = len(root_node.untouched)
+            
+        while root_node.ni < sims:
+            leaf_node = tree_policy(root_node, function, param, kwargs) # selection and expansion phases
+            value = rollout_policy(leaf_node, function, solution_list, kwargs) # simulation of leaf node
+            backpropagate(leaf_node, value)
+
+    new_sols = []
+    for solution in solution_list:
+        action_time = solution[1]
+        head = solution[-1]
+        tail = [x for x in head if x[0] not in checks]
+        tail.reverse()
+        for op in tail:
+            ndx = tail.index(op)
+            if op[0] == "S":
+                tail[ndx] = ("S*", op[1])
+
+        cirq, new_order = convert_to_circuit(root_node.state.column_num, head, rot_params)
+        tail, order = convert_to_circuit(root_node.state.column_num, tail, rot_params)
+
+        new_tail = GreedySynthesisClifford().run(
+            Clifford(tail)
+        )
+
+        new_tail = transpile(new_tail, basis_gates = ["cx", "rz", "s", "sdg", "h"], optimization_level=0)
+        cirq.compose(new_tail, inplace=True)
+        new_sols.append((cirq.count_ops()['cx'], cirq.depth(), cirq.size(), action_time, cirq))
+        
+    
+    solution =   best_solution(new_sols)  
     return solution
 
 
 #######################################################################################
 # Functions going forward do not affect MCTS implementation but use it 
 
-def p_word_solution(p_word, function, mcts_param, end_time):
-    '''
-    Function to create a solution for a Pauli word 
-
-    p_word: Pauli word in Tableau form
-    function: heuristic function to use in MCTS 
-    mcts_param: float to use with MCTS to use with UCT
-    end_time: float to use with MCTS to dictate stop time in seconds
-    '''
-    path = []
-
-    # loop to run MCTS until the Pauli word is fully implemented
-    while len(p_word.xs) != 0:
-        action, new_word, graph = MCTS(Node(p_word), function, mcts_param, end_time)
-        path += action
-        p_word = new_word
-        
-
-    return path # returns a list containing the 'head' of the Pauli word circuit for a single Pauli word
-
-
-
-def full_circuit(p_sentence, function, mcts_param, stop_time, divs=3, rot_params = None, gate_cancellation=True, synth = 1):
-    tail = []
-    head = []
-    num_paulis = sum([len(x) for x in p_sentence])
-    num_qubits = len(p_sentence[0][0])
-    ndx_list = list(range(num_paulis))  
-    indices = ndx_list.copy()
+# function to retunr full circuit using MCTS
+def full_circuit(Paulis, function, mcts_param, stop_time = None, sims = None, rot_params = None, gate_cancellation=True, order_preserving = True, **kwargs):
+    checks = ["-X", "X", "-Y", "Y", "-Z", "Z"]
+    
+    
+    num_paulis = len(Paulis)
+    num_qubits = len(Paulis[0])
+    
+    ndxs = list(range(num_paulis))
+    
+    
+    
+      
+    indices = ndxs.copy()
     if rot_params == None:
         rot_params = ParameterVector("φ", num_paulis)
-        
-    paulis = ["-X", "X", "-Y", "Y", "-Z", "Z"]
-    p_word_group = [p_sentence[i:i + divs] for i in range(0, len(p_sentence), divs)]
-    
-    for word_group in p_word_group:
-        word_group = [Cirq_Tableau(word) for word in word_group]
-        root = word_group[0]
-        
-        
-        if head:
-            for op in head:
-                match op[0]:
-                    case "CX":
-                        root.apply_CX(op[1], op[2])
-                    case "S":
-                        root.apply_S(op[1])
-                    case "H":
-                        root.apply_H(op[1])
-                        
-            root_node = Node(root)
-            root_node.plist = [x for x in word_group if x != root]
-            root_node.ndx_list = indices
-            solution = MCTS(root_node, function, mcts_param, stop_time)
-            head += solution
-            #print(head)
-            tail += [x for x in solution if x[0] not in paulis]
-            rmv_paulis = len(head) - len(tail)
-            indices = ndx_list[rmv_paulis:]
-        else:
-            root_node = Node(root)
-            root_node.plist = [x for x in word_group if x != root]
-            root_node.ndx_list = indices
-            solution = MCTS(root_node, function, mcts_param, stop_time)  
-            head += solution
-            #print(head)
-            tail += [x for x in solution if x[0] not in paulis]
-            rmv_paulis = len(head) - len(tail)
-            indices = ndx_list[rmv_paulis:]
 
-    tail.reverse()
-    for op in tail:
-        ndx = tail.index(op)
-        if op[0] == "S":
-            tail[ndx] = ("S*", op[1])
-    #head += tail
+    if order_preserving:
+        DAG = build_anticommute_dag(Paulis)
+        
 
-    cirq, new_order = convert_to_circuit(num_qubits, head, rot_params)
-    tail, order = convert_to_circuit(num_qubits, tail, rot_params)
-    
-    if synth == 0:
-        cirq.compose(tail, inplace=True)
+    root_node = Node(Cirq_Tableau(Paulis))
+    root_node.ndx_list = ndxs
+    if order_preserving:
+        root_node.dag = DAG
+        root_node.untouched = [ndxs.index(j) for j in front_layer(DAG)]
+
+    if stop_time != None:
+        solution = MCTS(root_node, function, mcts_param,(tableau.row_num/num_paulis)*stop_time, sims, rot_params, checks,kwargs)
     else:
-        new_tail = GreedySynthesisClifford().run(
-            Clifford(tail)
-        )
-        cirq.compose(new_tail, inplace=True)
-        
-    if gate_cancellation:
-        cirq = dag_to_circuit(
-            CommutativeCancellation().run(
-                circuit_to_dag(cirq)
-            )
-        )
-
-    return cirq, new_order
+        solution = MCTS(root_node, function, mcts_param, None, sims,rot_params, checks,kwargs)
+    
+   
+    return solution
 
 
 #############################################33
@@ -310,38 +296,65 @@ def convert_to_circuit(num, solution, rot_params):
         
         match op[0]:
             case "CX":
-                qc.cx(pos - op[1],pos - op[2])
+                qc.cx(op[1],op[2])
             case "S":
-                qc.s(pos - op[1])
+                qc.s(op[1])
             case "S*":
-                qc.sdg(pos-op[1])
+                qc.sdg(op[1])
             case "H":
-                qc.h(pos-op[1])
+                qc.h(op[1])
             case "-X" | "X":
                 new_order.append(op[2])
-                qc.h(pos-op[1])
+                qc.h(op[1])
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[op[2]]),pos-op[1])
+                    qc.rz(2*(-rot_params[op[2]]),op[1])
                 else:
-                    qc.rz(2*rot_params[op[2]],pos-op[1])
-                qc.h(pos-op[1])
+                    qc.rz(2*rot_params[op[2]],op[1])
+                qc.h(op[1])
 
             case "-Y" | "Y":
                 new_order.append(op[2])
-                qc.s(pos - op[1])
-                qc.h(pos-op[1])
+                qc.s(op[1])
+                qc.h(op[1])
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[op[2]]),pos-op[1])
+                    qc.rz(2*(-rot_params[op[2]]),op[1])
                 else:
-                    qc.rz(2*rot_params[op[2]],pos-op[1])
-                qc.h(pos-op[1])
-                qc.sdg(pos - op[1])
+                    qc.rz(2*rot_params[op[2]],op[1])
+                qc.h(op[1])
+                qc.sdg(op[1])
 
             case "-Z" | "Z":
                 new_order.append(op[2])
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[op[2]]),pos-op[1])
+                    qc.rz(2*(-rot_params[op[2]]),op[1])
                 else:
-                    qc.rz(2*rot_params[op[2]],pos-op[1])
+                    qc.rz(2*rot_params[op[2]],op[1])
 
     return qc, new_order
+
+def pauli_strings_commute(pauli_str1, pauli_str2):
+    """
+    Determine if two Pauli strings commute.
+    
+    pauli_str1: A str representing the first Pauli operator.
+    pauli_str2: A str representing the second Pauli operator.
+    return: True if the Pauli strings commute, False otherwise.
+    -referenced from QuCLEAR code-
+    """
+    if len(pauli_str1) != len(pauli_str2):
+        raise ValueError("Pauli strings must be of the same length.", pauli_str1, pauli_str2)
+    
+    commute = True  # Assume they commute until proven otherwise
+    
+    anticommute_count = 0
+    
+    for i in range(len(pauli_str1)):
+        if pauli_str1[i] != pauli_str2[i] and pauli_str1[i] != 'I' and pauli_str2[i] != 'I':
+            # Found anti-commuting Pauli matrices
+            commute = False
+            anticommute_count += 1
+
+    if anticommute_count % 2 == 0:
+        commute = True
+    
+    return commute

@@ -1,14 +1,15 @@
 import numpy as np
 from src.classes import Cirq_Tableau
+from src.mcts_module import cx_count
+from qiskit.transpiler import CouplingMap
+from qiskit_ibm_runtime.fake_provider import FakeAlgiers, FakeAlmadenV2, FakeManhattanV2
+from qiskit.transpiler.passes import DenseLayout
+from qiskit.converters import circuit_to_dag, dag_to_circuit
+from qiskit.circuit import QuantumCircuit
 
-
-# TODO: write a more efficient pruning algorithm
+# function to remove rows in a tableau with only a single nonidentity operation
 def prune(tableau: Cirq_Tableau, ndx_list, allowed):
-    '''
-    Function to remove rows in a tableau with only a single nonidentity operation
     
-    :param tableau: Cirq_Tableau to act on
-    '''
     prn_ndxs = [] # list to hold all row indices to be pruned
     
     tab = tableau.copy() # copy of tableau to work on
@@ -61,17 +62,9 @@ def prune(tableau: Cirq_Tableau, ndx_list, allowed):
     return tab, single_q, new_ndx_list
     
 
-
+#Function to identify the best operation amongst a list - This function is mainly used to identify which one of the allowed transformations for a pair produces the best benefit
 def identify(tableau, op_list, ctrl, targ):
-    '''
-    Function to identify the best operation amongst a list 
-    This function is mainly used to identify which one of the allowed transformations for a pair produces the best benefit
-
-    tableau: Cirq_Tableau that holds our Pauli word
-    op_list: list of action tuples which are possible operations
-    ctrl: int that is index of control qubit
-    targ: int that is index of target qubit
-    '''
+    
     operation = None # best operation
     benefit = -float('inf') # benefit of an operation benefit = reduce - increase 
     reduced = 0 # number of reducible pairs across the ctrl and targ (equivalent to how many single qubit operations will be removed)
@@ -113,16 +106,9 @@ def identify(tableau, op_list, ctrl, targ):
     operation.append(("CX", ctrl, targ))
     return reduced, increased, operation 
 
-
+# Function that takes in a pair and identifies what Paulis are in it
 def compare(tab, ndx, ctrl, targ):
-    '''
-    Function that takes in a pair and identifies what Paulis are in it
-
-    tab: Cirq_tableau holding Pauli word
-    ndx: int holding index (row) of the Pauli string currently being reduced
-    ctrl: int holding index (column) of control qubit
-    targ: int holding index (column) of target qubit
-    '''
+    
 
     if tab.xs[ndx][ctrl] & ~tab.zs[ndx][ctrl]: # if control is X
         if tab.xs[ndx][targ] & ~tab.zs[ndx][targ]: # if target is X
@@ -186,14 +172,9 @@ def compare(tab, ndx, ctrl, targ):
             op_list = [[], [("H", ctrl), ("H", targ)], [("S", ctrl)], [("S", targ)], [("S", ctrl), ("S", targ)]]
             return identify(tab, op_list, ctrl, targ)
 
-
+# Heuristic function to produce a single reduction from one node of a tree to a child
 def pair_solve(tableau, ndx, ndx_list,allowed, kwargs):
-    '''
-    Heuristic function to produce a single reduction from one node of a tree to a child
-
-    tableau: Cirq_Tableau holding Pauli word
-    ndx: int holding index (row) of current Pauli string being reduced
-    '''
+    
     tab = tableau.copy()
     reduction = [] # reduction of Pauli string
 
@@ -256,5 +237,174 @@ def pair_solve(tableau, ndx, ndx_list,allowed, kwargs):
     # prunes of implemented Pauli string
     tab, single_q, new_ndx_list = prune(tab, ndx_list, allowed)
     reduction += single_q # appends to reduction
+    
+    return tab, reduction, new_ndx_list
+
+######################################################################
+
+# function that takes original coupling and reframes it in of the indexes of qubits in the code
+def generate_new_couple_list(coupling_list, register, phys_virt_map):
+    couple_list = []
+    key_list = phys_virt_map.keys()
+    for couple in coupling_list:
+        if couple[0] in key_list and couple[1] in key_list:
+            couple_list.append([register.index(phys_virt_map[couple[0]]), register.index(phys_virt_map[couple[1]])])
+
+    return couple_list
+
+# gievn some IBM layout algorithm, this function returns the the coupling list in terms of the code, the distance matrix and the coupling map
+def ibm_layout(num_qubits, machine=FakeAlmadenV2, algorithm=DenseLayout): 
+    
+    backend = machine()
+    
+    original_coupling_list = backend.configuration().coupling_map
+    original_cmap = CouplingMap(original_coupling_list)
+    instance = algorithm(coupling_map=original_cmap)
+    instance.run(circuit_to_dag(QuantumCircuit(num_qubits)))
+
+    phys_virt_map = instance.property_set["layout"].get_physical_bits()
+    register = list(instance.property_set['layout'].get_registers())[0]
+
+    new_coupling_list = generate_new_couple_list(original_coupling_list, register, phys_virt_map)
+    distance_matrix = np.array(CouplingMap(new_coupling_list).distance_matrix)
+
+    return distance_matrix, new_coupling_list, CouplingMap(new_coupling_list)
+
+# generates list of opoerations that reduce furthest qubits
+def generate_ops(tableau, pauli_ndx, distance_matrix, coupling_list):
+    
+    tab = tableau.copy()
+    ops = []
+
+    # occupancy vector for specific Pauli string we are trying to solve
+    occupancy = tab.xs[pauli_ndx] | tab.zs[pauli_ndx]
+
+    # distance metric for single Pauli string
+    dist_vals = np.matmul(distance_matrix, occupancy) * occupancy
+
+    # instead of taking sum this is a quick way to find qub
+    ndxs = np.where(dist_vals == np.max(dist_vals))[0]
+    
+    for ndx in ndxs:
+        for couple in coupling_list:
+            #if (~tab.xs[pauli_ndx][couple[1]] & ~tab.zs[pauli_ndx][couple[1]])& (~tab.xs[pauli_ndx][couple[1]] & ~tab.zs[pauli_ndx][couple[1]])
+            op = []
+            if couple[0] == ndx: # qubit to be eliminated lies on control
+                if  int(not tab.xs[pauli_ndx][couple[1]]) & int(not tab.zs[pauli_ndx][couple[1]]): # target is I
+                    ops.append([("CX", int(ndx), couple[1]),("CX", couple[1], int(ndx)),("CX", int(ndx), couple[1])])
+                    continue 
+                    
+                if tab.xs[pauli_ndx][ndx] & ~tab.zs[pauli_ndx][ndx]: #control is X
+                    op.append(("H", int(ndx)))
+                elif tab.xs[pauli_ndx][ndx] & tab.zs[pauli_ndx][ndx]: #control is Y
+                    op.append(("S", int(ndx)))
+                    op.append(("H", int(ndx)))
+                    
+
+                if tab.xs[pauli_ndx][couple[1]] & ~tab.zs[pauli_ndx][couple[1]]: #target is X
+                    ops.append(op + [("H", couple[1]), ("CX", int(ndx), couple[1])])
+                    ops.append(op + [("S", couple[1]), ("CX", int(ndx), couple[1])])
+                else:
+                    ops.append(op + [("CX", int(ndx), couple[1])])
+
+            elif couple[1] == ndx:# qubit to be eliminated lies on target
+                if int(not tab.xs[pauli_ndx][couple[0]]) & int( not tab.zs[pauli_ndx][couple[0]]): # control is I
+                    ops.append([("CX", couple[0], int(ndx)),("CX", int(ndx), couple[0]),("CX", couple[0], int(ndx))])
+                    continue
+                
+                if tab.xs[pauli_ndx][ndx] & tab.zs[pauli_ndx][ndx]: #target is Y
+                    op.append(("S", int(ndx)))
+                elif ~tab.xs[pauli_ndx][ndx] & tab.zs[pauli_ndx][ndx]: #target is Z
+                    op.append(("H", int(ndx)))
+                
+                if ~tab.xs[pauli_ndx][couple[0]] & tab.zs[pauli_ndx][couple[0]]: #control is Z
+                    ops.append(op + [("H", couple[0]), ("CX", couple[0], int(ndx))])
+                    ops.append(op + [("H", couple[0]),("S", couple[0]), ("CX", couple[0], int(ndx))])
+                else:
+                    ops.append(op + [("CX", couple[0], int(ndx))])
+    
+    if any(cx_count(x) == 1 for x in ops):
+        ops = [x for x in ops if cx_count(x) == 1]
+    
+    return ops
+
+# selects best operation from given list
+def best_oper(tableau,pauli_ndx, op_list, distance_matrix, switch):
+    
+    tab = None
+    operation = None
+    distance = float('inf')
+
+    pauli_occupancy = tableau.xs[pauli_ndx] | tableau.zs[pauli_ndx]
+
+    pauli_distance = sum(np.matmul(distance_matrix, pauli_occupancy) * pauli_occupancy)
+    
+    
+    for op in op_list:
+        table = tableau.copy()
+
+        for action in op:
+            match action[0]:
+                case "CX":
+                    table.apply_CX(action[1], action[2])
+                case "S":
+                    table.apply_S(action[1])
+                case "H":
+                    table.apply_H(action[1])
+        
+        occupancy = table.xs | table.zs
+        p_occupancy = occupancy[pauli_ndx]
+        pauli_dist = sum(np.matmul(distance_matrix, p_occupancy) * p_occupancy)
+
+        if switch:
+            if pauli_dist <= pauli_distance: 
+           
+                operation = op             
+                tab = table
+                pauli_distance = pauli_dist
+
+        else:
+            dist_vals = np.matmul(distance_matrix, occupancy.T) * occupancy.T
+            dist = sum(sum(dist_vals))
+            
+            if (dist < distance and pauli_dist <= pauli_distance): 
+           
+                operation = op
+                tab = table
+                distance = dist
+                pauli_distance = pauli_dist
+    return tab, operation
+
+# full hardware aware solving function that takes into account looping when no reduction happens
+def hrdwre_awr_solve(tableau, pauli_ndx, ndx_list,allowed,kwargs):
+
+    distance_matrix, coupling_list = kwargs['distance_matrix'], kwargs['coupling_list']
+    tab = tableau.copy()
+    reduction = []
+    elapsed_states = []
+    greedy_switch = False # greedy switch in case there is a loop 
+    while sum(tab.xs[pauli_ndx] | tab.zs[pauli_ndx]) != 1:
+        
+        operations = generate_ops(tab, pauli_ndx, distance_matrix, coupling_list)
+       
+        new_tab, best_op  = best_oper(tab,pauli_ndx, operations, distance_matrix, greedy_switch)
+
+        if new_tab not in elapsed_states:
+            tab = new_tab.copy()
+            reduction += best_op
+            elapsed_states.append(new_tab)
+          
+            
+        else:
+            greedy_switch = True
+            index = elapsed_states.index(new_tab)
+            reduction = reduction[:index+1]
+            
+            tab = new_tab
+            continue
+        
+        greedy_switch = False
+    tab, single_q, new_ndx_list = prune(tab, ndx_list, allowed)
+    reduction += single_q
     
     return tab, reduction, new_ndx_list

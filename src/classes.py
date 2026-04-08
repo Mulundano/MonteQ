@@ -178,10 +178,13 @@ class Node:
         state
     ):
         self._ni = 0 # number of simulations 
-        self._curr_cx_num = 0 # number of CXs that were needed to get to current node
         self._qi = 0 # cumulative CXs for root to terminal node across simulations
         self._parent = None # node that had action applied to get to current node
-        self._action = None # action applied to parent node to get to current node
+        self._action = [] # action applied to parent node to get to current node
+        self._action_time = 0 # time it takes to produce the action that led to the state of the Node 
+        self._untouched = list(range(state.row_num)) # set of unused actions - actually set of all possible child nodes
+        self._dag = None # dag for order preserving work
+        self._ndx_list = []
         self._children = [] # nodes produced when actions are applied to current node
         self._state = state # Pauli word representing state of node
         
@@ -218,6 +221,7 @@ class Node:
     def state(self, new_word):
         self._state = new_word
 
+        
     @property
     def parent(self):
         return self._parent
@@ -233,6 +237,38 @@ class Node:
     @action.setter
     def action(self, new_action):
         self._action = new_action
+
+    @property
+    def action_time(self):
+        return self._action_time
+
+    @action_time.setter
+    def action_time(self, new_time):
+        self._action_time = new_time
+    
+    @property
+    def untouched(self):
+        return self._untouched
+
+    @untouched.setter
+    def untouched(self, new_list):
+        self._untouched = new_list
+
+    @property
+    def dag(self):
+        return self._dag
+
+    @dag.setter
+    def dag(self, new_dag):
+        self._dag = new_dag
+        
+    @property
+    def ndx_list(self):
+        return self._ndx_list
+
+    @ndx_list.setter
+    def ndx_list(self, new_list):
+        self._ndx_list = new_list  
         
     @property
     def children(self):
