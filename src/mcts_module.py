@@ -317,9 +317,9 @@ def convert_to_circuit(num, solution, rot_params):
                 qc.s(op[1])
                 qc.h(op[1])
                 if "-" in op[0]:
-                    qc.rz(2*(-rot_params[op[2]]),op[1])
+                    qc.rz(2*(rot_params[op[2]]),op[1])
                 else:
-                    qc.rz(2*rot_params[op[2]],op[1])
+                    qc.rz(2*(-rot_params[op[2]]),op[1])
                 qc.h(op[1])
                 qc.sdg(op[1])
 
