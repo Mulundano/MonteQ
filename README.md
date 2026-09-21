@@ -9,7 +9,7 @@ Necessary packages:
 **WARNING: current structure does not have error handling so inputs must be given in specified format**
 
 ## Instructions: 
-Within the notebook labeled "src" in the example notebook, there as example of how to use the functions to produce a logical result and a hardware aware result.
+Within the file labeled "src" in the example notebook, there as example of how to use the functions to produce a logical result and a hardware aware result.
 
 
 **If you wish to test a full circuit output use the function "full_circuit" located in the src/mcts_module file and the pair_solve function in the src/heuristic_module file - "example" shows how to dynamically add the path into your system path so that src can be a module.**
